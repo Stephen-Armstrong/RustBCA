@@ -14,7 +14,7 @@ pub struct ParticleParameters {
     pub Es: Vec<f64>,
     pub pos: Vec<(f64, f64, f64)>,
     pub dir: Vec<(f64, f64, f64)>,
-    pub interaction_index: Vec<usize>
+    pub interaction_index: Vec<usize>,
 }
 
 #[derive(Clone, PartialEq, Debug, Copy)]
@@ -66,7 +66,7 @@ impl Particle {
         let diry = input.uy;
         let dirz = input.uz;
 
-        let dir_mag = (dirx*dirx + diry*diry + dirz*dirz).sqrt();
+        let dir_mag = (dirx * dirx + diry * diry + dirz * dirz).sqrt();
 
         Particle {
             m: input.m,
@@ -75,9 +75,9 @@ impl Particle {
             Ec: input.Ec,
             Es: input.Es,
             pos: Vector::new(input.x, input.y, input.z),
-            dir: Vector::new(dirx/dir_mag, diry/dir_mag, dirz/dir_mag),
+            dir: Vector::new(dirx / dir_mag, diry / dir_mag, dirz / dir_mag),
             pos_old: Vector::new(input.x, input.y, input.z),
-            dir_old: Vector::new(dirx/dir_mag, diry/dir_mag, dirz/dir_mag),
+            dir_old: Vector::new(dirx / dir_mag, diry / dir_mag, dirz / dir_mag),
             pos_origin: Vector::new(input.x, input.y, input.z),
             energy_origin: input.E,
             asympototic_deflection: 0.,
@@ -94,8 +94,23 @@ impl Particle {
         }
     }
 
-    pub fn new(m: f64, Z: f64, E: f64, Ec: f64, Es: f64, x: f64, y: f64, z: f64, dirx: f64, diry: f64, dirz: f64, incident: bool, track_trajectories: bool, interaction_index: usize) -> Particle {
-        let dir_mag = (dirx*dirx + diry*diry + dirz*dirz).sqrt();
+    pub fn new(
+        m: f64,
+        Z: f64,
+        E: f64,
+        Ec: f64,
+        Es: f64,
+        x: f64,
+        y: f64,
+        z: f64,
+        dirx: f64,
+        diry: f64,
+        dirz: f64,
+        incident: bool,
+        track_trajectories: bool,
+        interaction_index: usize,
+    ) -> Particle {
+        let dir_mag = (dirx * dirx + diry * diry + dirz * dirz).sqrt();
 
         Particle {
             m,
@@ -104,9 +119,9 @@ impl Particle {
             Ec,
             Es,
             pos: Vector::new(x, y, z),
-            dir: Vector::new(dirx/dir_mag, diry/dir_mag, dirz/dir_mag),
+            dir: Vector::new(dirx / dir_mag, diry / dir_mag, dirz / dir_mag),
             pos_old: Vector::new(x, y, z),
-            dir_old: Vector::new(dirx/dir_mag, diry/dir_mag, dirz/dir_mag),
+            dir_old: Vector::new(dirx / dir_mag, diry / dir_mag, dirz / dir_mag),
             pos_origin: Vector::new(x, y, z),
             energy_origin: E,
             asympototic_deflection: 0.,
@@ -124,22 +139,33 @@ impl Particle {
     }
     pub fn add_trajectory(&mut self) {
         if self.track_trajectories {
-            self.trajectory.push(Vector4 {E: self.E, x: self.pos.x, y: self.pos.y, z: self.pos.z});
+            self.trajectory.push(Vector4 {
+                E: self.E,
+                x: self.pos.x,
+                y: self.pos.y,
+                z: self.pos.z,
+            });
         }
     }
 
     pub fn energy_loss(&mut self, En: f64, Ee: f64) {
         if self.track_trajectories {
-            self.energies.push(EnergyLoss {Ee, En, x: self.pos.x, y: self.pos.y, z: self.pos.z});
+            self.energies.push(EnergyLoss {
+                Ee,
+                En,
+                x: self.pos.x,
+                y: self.pos.y,
+                z: self.pos.z,
+            });
         }
     }
 
     pub fn get_momentum(&mut self) -> Vector {
-        let speed = (2.*self.E/self.m).sqrt();
+        let speed = (2. * self.E / self.m).sqrt();
         Vector::new(
-            self.m*speed*self.dir.x,
-            self.m*speed*self.dir.y,
-            self.m*speed*self.dir.z,
+            self.m * speed * self.dir.x,
+            self.m * speed * self.dir.y,
+            self.m * speed * self.dir.z,
         )
     }
 }
@@ -150,23 +176,30 @@ pub fn rotate_particle(particle_1: &mut particle::Particle, psi: f64, phi: f64) 
     let cosz: f64 = particle_1.dir.z;
     let cphi: f64 = phi.cos();
     let sphi: f64 = phi.sin();
-    let sa = (1. - cosx*cosx).sqrt();
+    let sa = (1. - cosx * cosx).sqrt();
 
     //Particle direction update formulas from original TRIDYN paper, see Moeller and Eckstein 1988
     let cpsi: f64 = psi.cos();
     let spsi: f64 = psi.sin();
-    let cosx_new: f64 = cpsi*cosx + spsi*cphi*sa;
-    let cosy_new: f64 = cpsi*cosy - spsi/sa*(cphi*cosx*cosy - sphi*cosz);
-    let cosz_new: f64 = cpsi*cosz - spsi/sa*(cphi*cosx*cosz + sphi*cosy);
+    let cosx_new: f64 = cpsi * cosx + spsi * cphi * sa;
+    let cosy_new: f64 = cpsi * cosy - spsi / sa * (cphi * cosx * cosy - sphi * cosz);
+    let cosz_new: f64 = cpsi * cosz - spsi / sa * (cphi * cosx * cosz + sphi * cosy);
 
-    let dir_new = Vector {x: cosx_new, y: cosy_new, z: cosz_new};
+    let dir_new = Vector {
+        x: cosx_new,
+        y: cosy_new,
+        z: cosz_new,
+    };
 
     particle_1.dir.assign(&dir_new);
     particle_1.dir.normalize();
 }
 
-pub fn particle_advance(particle_1: &mut particle::Particle, mfp: f64, asympototic_deflection: f64) -> f64 {
-
+pub fn particle_advance(
+    particle_1: &mut particle::Particle,
+    mfp: f64,
+    asympototic_deflection: f64,
+) -> f64 {
     if particle_1.E > particle_1.Ec {
         particle_1.add_trajectory();
     }
@@ -180,9 +213,9 @@ pub fn particle_advance(particle_1: &mut particle::Particle, mfp: f64, asympotot
     let distance_traveled = mfp + particle_1.asympototic_deflection - asympototic_deflection;
 
     //dir has been updated, so use previous direction to advance in space
-    particle_1.pos.x += particle_1.dir_old.x*distance_traveled;
-    particle_1.pos.y += particle_1.dir_old.y*distance_traveled;
-    particle_1.pos.z += particle_1.dir_old.z*distance_traveled;
+    particle_1.pos.x += particle_1.dir_old.x * distance_traveled;
+    particle_1.pos.y += particle_1.dir_old.y * distance_traveled;
+    particle_1.pos.z += particle_1.dir_old.z * distance_traveled;
     particle_1.asympototic_deflection = asympototic_deflection;
 
     //Update previous direction
@@ -195,11 +228,18 @@ pub fn particle_advance(particle_1: &mut particle::Particle, mfp: f64, asympotot
 
 pub fn refraction_angle(costheta: f64, energy_old: f64, energy_new: f64) -> f64 {
     //println!("energy_old: {} energy_new: {} costheta: {}", energy_old/EV, energy_new/EV, costheta);
-    let costheta = if costheta.abs() > 1. {costheta.signum()} else {costheta};
-    let sintheta0 = (1. - costheta*costheta).sqrt();
-    let sintheta1 = sintheta0*(energy_old/energy_new).sqrt();
+    let costheta = if costheta.abs() > 1. {
+        costheta.signum()
+    } else {
+        costheta
+    };
+    let sintheta0 = (1. - costheta * costheta).sqrt();
+    let sintheta1 = sintheta0 * (energy_old / energy_new).sqrt();
     let delta_theta = sintheta1.asin() - sintheta0.asin();
-    assert!(!delta_theta.is_nan(), "Numerical error: refraction returned NaN.");
+    assert!(
+        !delta_theta.is_nan(),
+        "Numerical error: refraction returned NaN."
+    );
     let sign = -costheta.signum();
-    return sign*delta_theta;
+    return sign * delta_theta;
 }

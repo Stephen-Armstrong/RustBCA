@@ -2,20 +2,19 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
-#[cfg(feature = "cpr_rootfinder_openblas")]
-extern crate openblas_src;
-#[cfg(feature = "cpr_rootfinder_netlib")]
-extern crate netlib_src;
 #[cfg(feature = "cpr_rootfinder_intel_mkl")]
 extern crate intel_mkl_src;
+#[cfg(feature = "cpr_rootfinder_netlib")]
+extern crate netlib_src;
+#[cfg(feature = "cpr_rootfinder_openblas")]
+extern crate openblas_src;
 
-
-use std::{env, fmt};
 use std::mem::discriminant;
+use std::{env, fmt};
 
 //extern crate openblas_src;
 //Progress bar crate - works wiht rayon
-use indicatif::{ProgressIterator, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
 
 //Error handling crate
 use anyhow::Result;
@@ -33,18 +32,18 @@ use rayon::prelude::*;
 use rayon::*;
 
 //I/O
+use std::f64::consts::PI;
 use std::fs::OpenOptions;
 use std::io::prelude::*;
 use std::io::BufWriter;
-use std::f64::consts::PI;
 
 //Load internal modules
+pub mod bca;
+pub mod interactions;
 pub mod material;
+pub mod mesh;
 pub mod particle;
 pub mod tests;
-pub mod interactions;
-pub mod bca;
-pub mod mesh;
 
 //Physical constants
 const Q: f64 = 1.60217646E-19;
@@ -56,13 +55,14 @@ const NM: f64 = 1E-9;
 const CM: f64 = 1E-2;
 const EPS0: f64 = 8.85418781E-12;
 const A0: f64 = 5.29177211E-11;
-const ME: f64 =  9.109383632E-31;
+const ME: f64 = 9.109383632E-31;
 const SQRTPI: f64 = 1.772453850906;
 const SQRT2PI: f64 = 2.506628274631;
 const C: f64 = 299792000.;
-const BETHE_BLOCH_PREFACTOR: f64 = 4.*PI*(Q*Q/(4.*PI*EPS0))*(Q*Q/(4.*PI*EPS0))/ME/C/C;
-const LINDHARD_SCHARFF_PREFACTOR: f64 = 1.212*ANGSTROM*ANGSTROM*Q;
-const LINDHARD_REDUCED_ENERGY_PREFACTOR: f64 = 4.*PI*EPS0/Q/Q;
+const BETHE_BLOCH_PREFACTOR: f64 =
+    4. * PI * (Q * Q / (4. * PI * EPS0)) * (Q * Q / (4. * PI * EPS0)) / ME / C / C;
+const LINDHARD_SCHARFF_PREFACTOR: f64 = 1.212 * ANGSTROM * ANGSTROM * Q;
+const LINDHARD_REDUCED_ENERGY_PREFACTOR: f64 = 4. * PI * EPS0 / Q / Q;
 
 #[derive(Deserialize, PartialEq, Clone, Copy)]
 pub enum ElectronicStoppingMode {
@@ -75,10 +75,18 @@ pub enum ElectronicStoppingMode {
 impl fmt::Display for ElectronicStoppingMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            ElectronicStoppingMode::INTERPOLATED => write!(f, "Biersack-Varelas electronic stopping"),
-            ElectronicStoppingMode::LOW_ENERGY_NONLOCAL => write!(f, "Lindhard-Scharff electronic stopping"),
-            ElectronicStoppingMode::LOW_ENERGY_LOCAL => write!(f, "Oen-Robinson electronic stopping"),
-            ElectronicStoppingMode::LOW_ENERGY_EQUIPARTITION => write!(f, "Equipartition with Lindhard-Scharff and Oen-Robinson"),
+            ElectronicStoppingMode::INTERPOLATED => {
+                write!(f, "Biersack-Varelas electronic stopping")
+            }
+            ElectronicStoppingMode::LOW_ENERGY_NONLOCAL => {
+                write!(f, "Lindhard-Scharff electronic stopping")
+            }
+            ElectronicStoppingMode::LOW_ENERGY_LOCAL => {
+                write!(f, "Oen-Robinson electronic stopping")
+            }
+            ElectronicStoppingMode::LOW_ENERGY_EQUIPARTITION => {
+                write!(f, "Equipartition with Lindhard-Scharff and Oen-Robinson")
+            }
         }
     }
 }
@@ -91,7 +99,7 @@ pub enum SurfaceBindingModel {
 }
 
 impl fmt::Display for SurfaceBindingModel {
-    fn fmt (&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             SurfaceBindingModel::INDIVIDUAL => write!(f,
                 "Individual surface binding energies."),
@@ -102,7 +110,6 @@ impl fmt::Display for SurfaceBindingModel {
         }
     }
 }
-
 
 #[derive(Deserialize, PartialEq, Clone, Copy)]
 pub enum MeanFreePathModel {
@@ -126,26 +133,46 @@ pub enum InteractionPotential {
     KR_C,
     ZBL,
     LENZ_JENSEN,
-    LENNARD_JONES_12_6 {sigma: f64, epsilon: f64},
-    LENNARD_JONES_65_6 {sigma: f64, epsilon: f64},
-    MORSE{D: f64, alpha: f64, r0: f64},
+    LENNARD_JONES_12_6 { sigma: f64, epsilon: f64 },
+    LENNARD_JONES_65_6 { sigma: f64, epsilon: f64 },
+    MORSE { D: f64, alpha: f64, r0: f64 },
     WW,
-    COULOMB{Za: f64, Zb: f64}
+    COULOMB { Za: f64, Zb: f64 },
 }
 
 impl fmt::Display for InteractionPotential {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            InteractionPotential::TRIDYN => write!(f, "TRIDYN-style Kr-C (Different MAGIC constants)"),
+            InteractionPotential::TRIDYN => {
+                write!(f, "TRIDYN-style Kr-C (Different MAGIC constants)")
+            }
             InteractionPotential::MOLIERE => write!(f, "Moliere Potential"),
             InteractionPotential::KR_C => write!(f, "Kr-C Potential"),
             InteractionPotential::ZBL => write!(f, "ZBL Potential"),
             InteractionPotential::LENZ_JENSEN => write!(f, "Lenz-Jensen Potential"),
-            InteractionPotential::LENNARD_JONES_12_6{sigma, epsilon} => write!(f, "Lennard-Jones 12-6 Potential with sigma = {} A, epsilon = {} eV", sigma/ANGSTROM, epsilon/EV),
-            InteractionPotential::LENNARD_JONES_65_6{sigma, epsilon} => write!(f, "Lennard-Jones 6.5-6 Potential with sigma = {} A, epsilon = {} eV", sigma/ANGSTROM, epsilon/EV),
-            InteractionPotential::MORSE{D, alpha, r0} => write!(f, "Morse potential with D = {} eV, alpha = {} 1/A, and r0 = {} A", D/EV, alpha*ANGSTROM, r0/ANGSTROM),
+            InteractionPotential::LENNARD_JONES_12_6 { sigma, epsilon } => write!(
+                f,
+                "Lennard-Jones 12-6 Potential with sigma = {} A, epsilon = {} eV",
+                sigma / ANGSTROM,
+                epsilon / EV
+            ),
+            InteractionPotential::LENNARD_JONES_65_6 { sigma, epsilon } => write!(
+                f,
+                "Lennard-Jones 6.5-6 Potential with sigma = {} A, epsilon = {} eV",
+                sigma / ANGSTROM,
+                epsilon / EV
+            ),
+            InteractionPotential::MORSE { D, alpha, r0 } => write!(
+                f,
+                "Morse potential with D = {} eV, alpha = {} 1/A, and r0 = {} A",
+                D / EV,
+                alpha * ANGSTROM,
+                r0 / ANGSTROM
+            ),
             InteractionPotential::WW => write!(f, "W-W cubic spline interaction potential."),
-            InteractionPotential::COULOMB{Za, Zb} => write!(f, "Coulombic interaction with Za = {} and Zb = {}", Za, Zb)
+            InteractionPotential::COULOMB { Za, Zb } => {
+                write!(f, "Coulombic interaction with Za = {} and Zb = {}", Za, Zb)
+            }
         }
     }
 }
@@ -160,16 +187,20 @@ impl PartialEq for InteractionPotential {
 pub enum ScatteringIntegral {
     MENDENHALL_WELLER,
     MAGIC,
-    GAUSS_MEHLER{n_points: usize},
-    GAUSS_LEGENDRE
+    GAUSS_MEHLER { n_points: usize },
+    GAUSS_LEGENDRE,
 }
 
 impl fmt::Display for ScatteringIntegral {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            ScatteringIntegral::MENDENHALL_WELLER => write!(f, "Mendenhall-Weller 4-Point Lobatto Quadrature"),
+            ScatteringIntegral::MENDENHALL_WELLER => {
+                write!(f, "Mendenhall-Weller 4-Point Lobatto Quadrature")
+            }
             ScatteringIntegral::MAGIC => write!(f, "MAGIC Algorithm"),
-            ScatteringIntegral::GAUSS_MEHLER{n_points} => write!(f, "Gauss-Mehler {}-point Quadrature", n_points),
+            ScatteringIntegral::GAUSS_MEHLER { n_points } => {
+                write!(f, "Gauss-Mehler {}-point Quadrature", n_points)
+            }
             ScatteringIntegral::GAUSS_LEGENDRE => write!(f, "Gauss-Legendre 5-point Quadrature"),
         }
     }
@@ -183,10 +214,24 @@ impl PartialEq for ScatteringIntegral {
 
 #[derive(Deserialize, Clone, Copy)]
 pub enum Rootfinder {
-    NEWTON{max_iterations: usize, tolerance: f64},
-    CPR{n0: usize, nmax: usize, epsilon: f64, complex_threshold: f64, truncation_threshold: f64,
-        far_from_zero: f64, interval_limit: f64, upper_bound_const: f64, derivative_free: bool},
-    POLYNOMIAL{complex_threshold: f64},
+    NEWTON {
+        max_iterations: usize,
+        tolerance: f64,
+    },
+    CPR {
+        n0: usize,
+        nmax: usize,
+        epsilon: f64,
+        complex_threshold: f64,
+        truncation_threshold: f64,
+        far_from_zero: f64,
+        interval_limit: f64,
+        upper_bound_const: f64,
+        derivative_free: bool,
+    },
+    POLYNOMIAL {
+        complex_threshold: f64,
+    },
 }
 
 impl fmt::Display for Rootfinder {
@@ -213,14 +258,10 @@ pub struct Vector {
 }
 impl Vector {
     pub fn new(x: f64, y: f64, z: f64) -> Vector {
-        Vector {
-            x,
-            y,
-            z
-        }
+        Vector { x, y, z }
     }
     fn magnitude(&self) -> f64 {
-        return (self.x*self.x + self.y*self.y + self.z*self.z).sqrt();
+        return (self.x * self.x + self.y * self.y + self.z * self.z).sqrt();
     }
 
     fn assign(&mut self, other: &Vector) {
@@ -251,12 +292,7 @@ pub struct Vector4 {
 
 impl Vector4 {
     fn new(E: f64, x: f64, y: f64, z: f64) -> Vector4 {
-        Vector4 {
-            E,
-            x,
-            y,
-            z
-        }
+        Vector4 { E, x, y, z }
     }
 }
 
@@ -271,13 +307,7 @@ pub struct EnergyLoss {
 
 impl EnergyLoss {
     fn new(Ee: f64, En: f64, x: f64, y: f64, z: f64) -> EnergyLoss {
-        EnergyLoss {
-            En,
-            Ee,
-            x,
-            y,
-            z
-        }
+        EnergyLoss { En, Ee, x, y, z }
     }
 }
 
@@ -312,7 +342,6 @@ pub struct Options {
 }
 
 fn main() {
-
     let args: Vec<String> = env::args().collect();
 
     let input_file = match args.len() {
@@ -329,7 +358,9 @@ fn main() {
         .create(false)
         .open(&input_file)
         .expect(format!("Input errror: could not open input file {}.", &input_file).as_str());
-    file.read_to_string(&mut input_toml).context("Could not convert TOML file to string.").unwrap();
+    file.read_to_string(&mut input_toml)
+        .context("Could not convert TOML file to string.")
+        .unwrap();
     let input: Input = toml::from_str(&input_toml)
         .expect("Input error: failed to parse TOML file. Check that all floats have terminal 0s and that there are no missing/extra delimiters.");
 
@@ -339,11 +370,26 @@ fn main() {
     let particle_parameters = input.particle_parameters;
 
     //Check that all material arrays are of equal length.
-    assert!(material.n.len() == material.m.len(), "Input error: material input arrays of unequal length.");
-    assert!(material.n.len() == material.Z.len(), "Input error: material input arrays of unequal length.");
-    assert!(material.n.len() == material.Eb.len(), "Input error: material input arrays of unequal length.");
-    assert!(material.n.len() == material.Es.len(), "Input error: material input arrays of unequal length.");
-    assert!(material.n.len() == material.interaction_index.len(), "Input error: material input arrays of unequal length.");
+    assert!(
+        material.n.len() == material.m.len(),
+        "Input error: material input arrays of unequal length."
+    );
+    assert!(
+        material.n.len() == material.Z.len(),
+        "Input error: material input arrays of unequal length."
+    );
+    assert!(
+        material.n.len() == material.Eb.len(),
+        "Input error: material input arrays of unequal length."
+    );
+    assert!(
+        material.n.len() == material.Es.len(),
+        "Input error: material input arrays of unequal length."
+    );
+    assert!(
+        material.n.len() == material.interaction_index.len(),
+        "Input error: material input arrays of unequal length."
+    );
 
     //Check that incompatible options are not on simultaneously
 
@@ -360,61 +406,109 @@ fn main() {
     }
 
     for i in 0..options.interaction_potential.len() {
-        assert!(&options.interaction_potential.len() == &options.interaction_potential[i].len(),
-            "Input error: interaction matrix not square.");
+        assert!(
+            &options.interaction_potential.len() == &options.interaction_potential[i].len(),
+            "Input error: interaction matrix not square."
+        );
 
-        assert!(&options.scattering_integral.len() == &options.scattering_integral[i].len(),
-            "Input error: scattering intergral matrix not square.");
+        assert!(
+            &options.scattering_integral.len() == &options.scattering_integral[i].len(),
+            "Input error: scattering intergral matrix not square."
+        );
 
-        assert!(&options.root_finder.len() == &options.root_finder[i].len(),
-            "Input error: rootfinder matrix not square.");
+        assert!(
+            &options.root_finder.len() == &options.root_finder[i].len(),
+            "Input error: rootfinder matrix not square."
+        );
     }
 
-    for ((interaction_potentials, scattering_integrals), root_finders) in options.interaction_potential.clone().iter().zip(options.scattering_integral.clone()).zip(options.root_finder.clone()) {
-        for ((interaction_potential, scattering_integral), root_finder) in interaction_potentials.iter().zip(scattering_integrals).zip(root_finders) {
-
-            if cfg!(not(any(feature="cpr_rootfinder_openblas", feature="cpr_rootfinder_netlib", feature="cpr_rootfinder_intel_mkl",))) {
-                assert!( match root_finder {
-                    Rootfinder::POLYNOMIAL{..} => false,
-                    Rootfinder::CPR{..} => false,
-                    _ => true,
-                },
-                "Input error: CPR rootfinder not enabled. Build with --features cpr_rootfinder");
+    for ((interaction_potentials, scattering_integrals), root_finders) in options
+        .interaction_potential
+        .clone()
+        .iter()
+        .zip(options.scattering_integral.clone())
+        .zip(options.root_finder.clone())
+    {
+        for ((interaction_potential, scattering_integral), root_finder) in interaction_potentials
+            .iter()
+            .zip(scattering_integrals)
+            .zip(root_finders)
+        {
+            if cfg!(not(any(
+                feature = "cpr_rootfinder_openblas",
+                feature = "cpr_rootfinder_netlib",
+                feature = "cpr_rootfinder_intel_mkl",
+            ))) {
+                assert!(
+                    match root_finder {
+                        Rootfinder::POLYNOMIAL { .. } => false,
+                        Rootfinder::CPR { .. } => false,
+                        _ => true,
+                    },
+                    "Input error: CPR rootfinder not enabled. Build with --features cpr_rootfinder"
+                );
             }
 
             assert!(
                 match (interaction_potential, root_finder) {
-                    (InteractionPotential::LENNARD_JONES_12_6{..}, Rootfinder::CPR{..}) => true,
-                    (InteractionPotential::LENNARD_JONES_12_6{..}, Rootfinder::POLYNOMIAL{..}) => true,
-                    (InteractionPotential::LENNARD_JONES_12_6{..}, _) => false,
-                    (InteractionPotential::LENNARD_JONES_65_6{..}, Rootfinder::CPR{..}) => true,
-                    (InteractionPotential::LENNARD_JONES_65_6{..}, Rootfinder::POLYNOMIAL{..}) => true,
-                    (InteractionPotential::LENNARD_JONES_65_6{..}, _) => false,
-                    (InteractionPotential::MORSE{..}, Rootfinder::CPR{..}) => true,
-                    (InteractionPotential::MORSE{..}, _) => false,
-                    (_, Rootfinder::POLYNOMIAL{..}) => false,
+                    (InteractionPotential::LENNARD_JONES_12_6 { .. }, Rootfinder::CPR { .. }) =>
+                        true,
+                    (
+                        InteractionPotential::LENNARD_JONES_12_6 { .. },
+                        Rootfinder::POLYNOMIAL { .. },
+                    ) => true,
+                    (InteractionPotential::LENNARD_JONES_12_6 { .. }, _) => false,
+                    (InteractionPotential::LENNARD_JONES_65_6 { .. }, Rootfinder::CPR { .. }) =>
+                        true,
+                    (
+                        InteractionPotential::LENNARD_JONES_65_6 { .. },
+                        Rootfinder::POLYNOMIAL { .. },
+                    ) => true,
+                    (InteractionPotential::LENNARD_JONES_65_6 { .. }, _) => false,
+                    (InteractionPotential::MORSE { .. }, Rootfinder::CPR { .. }) => true,
+                    (InteractionPotential::MORSE { .. }, _) => false,
+                    (_, Rootfinder::POLYNOMIAL { .. }) => false,
                     (_, _) => true,
                 },
-            "Input error: cannot use {} with {}. Try switching to a different rootfinder.", interaction_potential, root_finder);
+                "Input error: cannot use {} with {}. Try switching to a different rootfinder.",
+                interaction_potential,
+                root_finder
+            );
         }
     }
 
     //Check that particle arrays are equal length
-    assert_eq!(particle_parameters.Z.len(), particle_parameters.m.len(),
-        "Input error: particle input arrays of unequal length.");
-    assert_eq!(particle_parameters.Z.len(), particle_parameters.E.len(),
-        "Input error: particle input arrays of unequal length.");
-    assert_eq!(particle_parameters.Z.len(), particle_parameters.pos.len(),
-        "Input error: particle input arrays of unequal length.");
-    assert_eq!(particle_parameters.Z.len(), particle_parameters.dir.len(),
-        "Input error: particle input arrays of unequal length.");
+    assert_eq!(
+        particle_parameters.Z.len(),
+        particle_parameters.m.len(),
+        "Input error: particle input arrays of unequal length."
+    );
+    assert_eq!(
+        particle_parameters.Z.len(),
+        particle_parameters.E.len(),
+        "Input error: particle input arrays of unequal length."
+    );
+    assert_eq!(
+        particle_parameters.Z.len(),
+        particle_parameters.pos.len(),
+        "Input error: particle input arrays of unequal length."
+    );
+    assert_eq!(
+        particle_parameters.Z.len(),
+        particle_parameters.dir.len(),
+        "Input error: particle input arrays of unequal length."
+    );
 
     //Check that interaction indices are all within interaction matrices
-    assert!(material.interaction_index.iter().max().unwrap() < &options.interaction_potential.len(),
-        "Input error: interaction matrix too small for material interaction indices.");
-    assert!(particle_parameters.interaction_index.iter().max().unwrap() < &options.interaction_potential.len(),
-        "Input error: interaction matrix too small for particle interaction indices.");
-
+    assert!(
+        material.interaction_index.iter().max().unwrap() < &options.interaction_potential.len(),
+        "Input error: interaction matrix too small for material interaction indices."
+    );
+    assert!(
+        particle_parameters.interaction_index.iter().max().unwrap()
+            < &options.interaction_potential.len(),
+        "Input error: interaction matrix too small for particle interaction indices."
+    );
 
     //N is the number of distinct particles.
     let N = particle_parameters.Z.len();
@@ -432,18 +526,22 @@ fn main() {
 
     let energy_unit: f64 = match particle_parameters.energy_unit.as_str() {
         "EV" => EV,
-        "J"  => 1.,
-        "KEV" => EV*1E3,
-        "MEV" => EV*1E6,
-        _ => panic!("Input error: unknown unit {} in input file. Choose one of: EV, J, KEV, MEV",
-            particle_parameters.energy_unit.as_str())
+        "J" => 1.,
+        "KEV" => EV * 1E3,
+        "MEV" => EV * 1E6,
+        _ => panic!(
+            "Input error: unknown unit {} in input file. Choose one of: EV, J, KEV, MEV",
+            particle_parameters.energy_unit.as_str()
+        ),
     };
 
     let mass_unit: f64 = match particle_parameters.mass_unit.as_str() {
         "AMU" => AMU,
         "KG" => 1.0,
-        _ => panic!("Input error: unknown unit {} in input file. Choose one of: AMU, KG",
-            particle_parameters.mass_unit.as_str())
+        _ => panic!(
+            "Input error: unknown unit {} in input file. Choose one of: AMU, KG",
+            particle_parameters.mass_unit.as_str()
+        ),
     };
 
     //HDF5
@@ -455,11 +553,13 @@ fn main() {
             let particle_input_file = hdf5::File::open(particle_input_filename)
                 .context("Input error: cannot open HDF5 file.")
                 .unwrap();
-            let particle_input = particle_input_file.dataset("particles")
+            let particle_input = particle_input_file
+                .dataset("particles")
                 .context("Input error: cannot read from HDF5 file.")
                 .unwrap();
-            particle_input.read_raw::<particle::ParticleInput>().unwrap()
-
+            particle_input
+                .read_raw::<particle::ParticleInput>()
+                .unwrap()
         } else {
             let mut particle_input: Vec<particle::ParticleInput> = Vec::new();
 
@@ -475,22 +575,20 @@ fn main() {
                 let (cosx, cosy, cosz) = particle_parameters.dir[particle_index];
                 for sub_particle_index in 0..N_ {
                     //Add new particle to particle vector
-                    particle_input.push(
-                        particle::ParticleInput{
-                            m: m*mass_unit,
-                            Z: Z,
-                            E: E*energy_unit,
-                            Ec: Ec*energy_unit,
-                            Es: Es*energy_unit,
-                            x: x*length_unit,
-                            y: y*length_unit,
-                            z: z*length_unit,
-                            ux: cosx,
-                            uy: cosy,
-                            uz: cosz,
-                            interaction_index: interaction_index
-                        }
-                    );
+                    particle_input.push(particle::ParticleInput {
+                        m: m * mass_unit,
+                        Z: Z,
+                        E: E * energy_unit,
+                        Ec: Ec * energy_unit,
+                        Es: Es * energy_unit,
+                        x: x * length_unit,
+                        y: y * length_unit,
+                        z: z * length_unit,
+                        ux: cosx,
+                        uy: cosy,
+                        uz: cosz,
+                        interaction_index: interaction_index,
+                    });
                 }
             }
             particle_input
@@ -500,7 +598,9 @@ fn main() {
     #[cfg(not(feature = "hdf5_input"))]
     let particle_input_array: Vec<particle::ParticleInput> = {
         if options.use_hdf5 {
-            panic!("HDF5 particle input not enabled. Enable with: cargo build --features hdf5_input")
+            panic!(
+                "HDF5 particle input not enabled. Enable with: cargo build --features hdf5_input"
+            )
         } else {
             let mut particle_input: Vec<particle::ParticleInput> = Vec::new();
 
@@ -515,24 +615,21 @@ fn main() {
                 let (x, y, z) = particle_parameters.pos[particle_index];
                 let (cosx, cosy, cosz) = particle_parameters.dir[particle_index];
                 for sub_particle_index in 0..N_ {
-
                     //Add new particle to particle vector
-                    particle_input.push(
-                        particle::ParticleInput{
-                            m: m*mass_unit,
-                            Z: Z,
-                            E: E*energy_unit,
-                            Ec: Ec*energy_unit,
-                            Es: Es*energy_unit,
-                            x: x*length_unit,
-                            y: y*length_unit,
-                            z: z*length_unit,
-                            ux: cosx,
-                            uy: cosy,
-                            uz: cosz,
-                            interaction_index
-                        }
-                    );
+                    particle_input.push(particle::ParticleInput {
+                        m: m * mass_unit,
+                        Z: Z,
+                        E: E * energy_unit,
+                        Ec: Ec * energy_unit,
+                        Es: Es * energy_unit,
+                        x: x * length_unit,
+                        y: y * length_unit,
+                        z: z * length_unit,
+                        ux: cosx,
+                        uy: cosy,
+                        uz: cosz,
+                        interaction_index,
+                    });
                 }
             }
             particle_input
@@ -592,7 +689,8 @@ fn main() {
         .open(format!("{}{}", options.name, "displacements.output"))
         .context("Could not open output file.")
         .unwrap();
-    let mut displacements_file_stream = BufWriter::with_capacity(options.stream_size, displacements_file);
+    let mut displacements_file_stream =
+        BufWriter::with_capacity(options.stream_size, displacements_file);
 
     let energy_loss_file = OpenOptions::new()
         .write(true)
@@ -601,7 +699,8 @@ fn main() {
         .open(format!("{}{}", options.name, "energy_loss.output"))
         .context("Could not open output file.")
         .unwrap();
-    let mut energy_loss_file_stream = BufWriter::with_capacity(options.stream_size, energy_loss_file);
+    let mut energy_loss_file_stream =
+        BufWriter::with_capacity(options.stream_size, energy_loss_file);
 
     println!("Processing {} ions...", particle_input_array.len());
 
@@ -609,99 +708,208 @@ fn main() {
 
     //Initialize threads with rayon
     println!("Initializing with {} threads...", options.num_threads);
-    if options.num_threads > 1 {let pool = rayon::ThreadPoolBuilder::new().num_threads(options.num_threads).build_global().unwrap();};
+    if options.num_threads > 1 {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(options.num_threads)
+            .build_global()
+            .unwrap();
+    };
 
     let bar: ProgressBar = ProgressBar::new(options.num_chunks);
 
-    bar.set_style(ProgressStyle::default_bar()
-        .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {percent}%")
-        .progress_chars("#>-"));
+    bar.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {percent}%")
+            .progress_chars("#>-"),
+    );
 
-    assert!(total_count/options.num_chunks > 0, "Input error: chunk size == 0 - reduce num_chunks or increase particle count.");
+    assert!(
+        total_count / options.num_chunks > 0,
+        "Input error: chunk size == 0 - reduce num_chunks or increase particle count."
+    );
 
     //Main loop
-    for (chunk_index, particle_input_chunk) in particle_input_array.chunks((total_count/options.num_chunks) as usize).progress_with(bar).enumerate() {
-
+    for (chunk_index, particle_input_chunk) in particle_input_array
+        .chunks((total_count / options.num_chunks) as usize)
+        .progress_with(bar)
+        .enumerate()
+    {
         let mut finished_particles: Vec<particle::Particle> = Vec::new();
 
         if options.num_threads > 1 {
             finished_particles.par_extend(
-                particle_input_chunk.into_par_iter()
-                .map(|particle_input| bca::single_ion_bca(particle::Particle::from_input(*particle_input, &options), &material, &options))
-                    .flatten()
+                particle_input_chunk
+                    .into_par_iter()
+                    .map(|particle_input| {
+                        bca::single_ion_bca(
+                            particle::Particle::from_input(*particle_input, &options),
+                            &material,
+                            &options,
+                        )
+                    })
+                    .flatten(),
             );
         } else {
             finished_particles.extend(
-                particle_input_chunk.iter()
-                .map(|particle_input| bca::single_ion_bca(particle::Particle::from_input(*particle_input, &options), &material, &options))
-                    .flatten()
+                particle_input_chunk
+                    .iter()
+                    .map(|particle_input| {
+                        bca::single_ion_bca(
+                            particle::Particle::from_input(*particle_input, &options),
+                            &material,
+                            &options,
+                        )
+                    })
+                    .flatten(),
             );
         }
 
         for particle in finished_particles {
             //
             if !particle.incident & options.track_displacements {
-                    writeln!(
-                        displacements_file_stream, "{},{},{},{},{},{}",
-                        particle.m/mass_unit, particle.Z, particle.energy_origin/energy_unit,
-                        particle.pos_origin.x/length_unit, particle.pos_origin.y/length_unit, particle.pos_origin.z/length_unit,
-                    ).expect(format!("Output error: could not write to {}displacements.output.", options.name).as_str());
+                writeln!(
+                    displacements_file_stream,
+                    "{},{},{},{},{},{}",
+                    particle.m / mass_unit,
+                    particle.Z,
+                    particle.energy_origin / energy_unit,
+                    particle.pos_origin.x / length_unit,
+                    particle.pos_origin.y / length_unit,
+                    particle.pos_origin.z / length_unit,
+                )
+                .expect(
+                    format!(
+                        "Output error: could not write to {}displacements.output.",
+                        options.name
+                    )
+                    .as_str(),
+                );
             }
 
             if particle.incident & particle.left {
                 writeln!(
-                    reflected_file_stream, "{},{},{},{},{},{},{},{},{},{}",
-                    particle.m/mass_unit, particle.Z, particle.E/energy_unit,
-                    particle.pos.x/length_unit, particle.pos.y/length_unit, particle.pos.z/length_unit,
-                    particle.dir.x, particle.dir.y, particle.dir.z,
+                    reflected_file_stream,
+                    "{},{},{},{},{},{},{},{},{},{}",
+                    particle.m / mass_unit,
+                    particle.Z,
+                    particle.E / energy_unit,
+                    particle.pos.x / length_unit,
+                    particle.pos.y / length_unit,
+                    particle.pos.z / length_unit,
+                    particle.dir.x,
+                    particle.dir.y,
+                    particle.dir.z,
                     particle.number_collision_events
-                ).expect(format!("Output error: could not write to {}reflected.output.", options.name).as_str());
+                )
+                .expect(
+                    format!(
+                        "Output error: could not write to {}reflected.output.",
+                        options.name
+                    )
+                    .as_str(),
+                );
             }
 
             //Incident particle, stopped in material: deposited
             if particle.incident & particle.stopped {
                 writeln!(
-                    deposited_file_stream, "{},{},{},{},{},{}",
-                    particle.m/mass_unit, particle.Z,
-                    particle.pos.x/length_unit, particle.pos.y/length_unit, particle.pos.z/length_unit,
+                    deposited_file_stream,
+                    "{},{},{},{},{},{}",
+                    particle.m / mass_unit,
+                    particle.Z,
+                    particle.pos.x / length_unit,
+                    particle.pos.y / length_unit,
+                    particle.pos.z / length_unit,
                     particle.number_collision_events
-                ).expect(format!("Output error: could not write to {}deposited.output.", options.name).as_str());
+                )
+                .expect(
+                    format!(
+                        "Output error: could not write to {}deposited.output.",
+                        options.name
+                    )
+                    .as_str(),
+                );
             }
 
             //Not an incident particle, left material: sputtered
             if !particle.incident & particle.left {
                 writeln!(
-                    sputtered_file_stream, "{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                    particle.m/mass_unit, particle.Z, particle.E/energy_unit,
-                    particle.pos.x/length_unit, particle.pos.y/length_unit, particle.pos.z/length_unit,
-                    particle.dir.x, particle.dir.y, particle.dir.z,
+                    sputtered_file_stream,
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    particle.m / mass_unit,
+                    particle.Z,
+                    particle.E / energy_unit,
+                    particle.pos.x / length_unit,
+                    particle.pos.y / length_unit,
+                    particle.pos.z / length_unit,
+                    particle.dir.x,
+                    particle.dir.y,
+                    particle.dir.z,
                     particle.number_collision_events,
-                    particle.pos_origin.x/length_unit, particle.pos_origin.y/length_unit, particle.pos_origin.z/length_unit
-                ).expect(format!("Output error: could not write to {}sputtered.output.", options.name).as_str());
+                    particle.pos_origin.x / length_unit,
+                    particle.pos_origin.y / length_unit,
+                    particle.pos_origin.z / length_unit
+                )
+                .expect(
+                    format!(
+                        "Output error: could not write to {}sputtered.output.",
+                        options.name
+                    )
+                    .as_str(),
+                );
             }
 
             //Trajectory output
             if particle.track_trajectories {
-                writeln!(trajectory_data_stream, "{}", particle.trajectory.len())
-                    .expect(format!("Output error: could not write to {}trajectory_data.output.", options.name).as_str());
+                writeln!(trajectory_data_stream, "{}", particle.trajectory.len()).expect(
+                    format!(
+                        "Output error: could not write to {}trajectory_data.output.",
+                        options.name
+                    )
+                    .as_str(),
+                );
 
                 for pos in particle.trajectory {
                     writeln!(
-                        trajectory_file_stream, "{},{},{},{},{},{}",
-                        particle.m/mass_unit, particle.Z, pos.E/energy_unit,
-                        pos.x/length_unit, pos.y/length_unit, pos.z/length_unit,
-                    ).expect(format!("Output error: could not write to {}trajectories.output.", options.name).as_str());
+                        trajectory_file_stream,
+                        "{},{},{},{},{},{}",
+                        particle.m / mass_unit,
+                        particle.Z,
+                        pos.E / energy_unit,
+                        pos.x / length_unit,
+                        pos.y / length_unit,
+                        pos.z / length_unit,
+                    )
+                    .expect(
+                        format!(
+                            "Output error: could not write to {}trajectories.output.",
+                            options.name
+                        )
+                        .as_str(),
+                    );
                 }
             }
 
             if particle.incident & options.track_energy_losses {
                 for energy_loss in particle.energies {
                     writeln!(
-                        energy_loss_file_stream, "{},{},{},{},{},{},{}",
-                        particle.m/mass_unit, particle.Z,
-                        energy_loss.En/energy_unit, energy_loss.Ee/energy_unit,
-                        energy_loss.x/length_unit, energy_loss.y/length_unit, energy_loss.z/length_unit,
-                    ).expect(format!("Output error: could not write to {}energy_loss.output.", options.name).as_str());
+                        energy_loss_file_stream,
+                        "{},{},{},{},{},{},{}",
+                        particle.m / mass_unit,
+                        particle.Z,
+                        energy_loss.En / energy_unit,
+                        energy_loss.Ee / energy_unit,
+                        energy_loss.x / length_unit,
+                        energy_loss.y / length_unit,
+                        energy_loss.z / length_unit,
+                    )
+                    .expect(
+                        format!(
+                            "Output error: could not write to {}energy_loss.output.",
+                            options.name
+                        )
+                        .as_str(),
+                    );
                 }
             }
         }
