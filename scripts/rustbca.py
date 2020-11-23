@@ -3,7 +3,7 @@ import time
 
 import toml
 import numpy as np
-from shapely.geometry import Point, Polygon, box
+from shapely.geometry import MultiPoint, Point, Polygon, box
 from scipy import constants
 import matplotlib.pyplot as plt
 from matplotlib import rcParams, cm
@@ -142,7 +142,7 @@ def generate_rustbca_input(Zb, Mb, n, Eca, Ecb, Esa, Esb, Eb, Ma, Za, E0, N, N_,
     interaction_potential='"KR_C"', high_energy=False, energy_barrier_thickness=(6.306E10)**(-1/3.),
     initial_particle_position = -1*ANGSTROM/MICRON, integral='"MENDENHALL_WELLER"',
     root_finder = '{"NEWTON"={max_iterations=100, tolerance=1e-3}}',
-    delta_x_angstrom=5., uniformly_distributed_ions=False):
+    delta_x_angstrom=5., uniformly_distributed_ions=False, rounded=False):
 
     '''
     Generates a rustbca input file. Assumes eV, amu, and microns for units.
@@ -182,22 +182,48 @@ def generate_rustbca_input(Zb, Mb, n, Eca, Ecb, Esa, Esb, Eb, Ma, Za, E0, N, N_,
 
     minx, miny, maxx, maxy = 0.0, -thickness/2., depth, thickness/2.
     surface = box(minx, miny, maxx, maxy)
-
     simulation_surface = surface.buffer(10*dx, cap_style=2, join_style=2)
-    mesh_2d_input = {
-        'length_unit': 'MICRON',
-        'triangles': [[0., depth, 0., thickness/2., -thickness/2., -thickness/2.], [0., depth, depth, thickness/2., thickness/2., -thickness/2.]],
-        'densities': [np.array(n)*(MICRON)**3, np.array(n)*(MICRON)**3],
-        'material_boundary_points': [[0., thickness/2.], [depth, thickness/2.], [depth, -thickness/2.], [0., -thickness/2.]],
-        'simulation_boundary_points':  list(simulation_surface.exterior.coords),
-        'energy_barrier_thickness': energy_barrier_thickness,
-        'electronic_stopping_correction_factors': [ck, ck],
-    }
+
+    if not rounded:
+        mesh_2d_input = {
+            'length_unit': 'MICRON',
+            'triangles': [[0., depth, 0., thickness/2., -thickness/2., -thickness/2.], [0., depth, depth, thickness/2., thickness/2., -thickness/2.]],
+            'densities': [np.array(n)*(MICRON)**3, np.array(n)*(MICRON)**3],
+            'material_boundary_points': [[0., thickness/2.], [depth, thickness/2.], [depth, -thickness/2.], [0., -thickness/2.]],
+            'simulation_boundary_points':  list(simulation_surface.exterior.coords),
+            'energy_barrier_thickness': energy_barrier_thickness,
+            'electronic_stopping_correction_factors': [ck, ck],
+        }
+    else:
+        aspect_ratio = 1
+        triangles, material_boundary, simulation_boundary = semicircle_rectangle_geometry(depth, thickness, dx, semicircle_aspect_ratio=aspect_ratio)
+
+        mesh_2d_input = {
+            'length_unit': 'MICRON',
+            'triangles': triangles,
+            'densities': [np.array(n)*(MICRON)**3 for _ in range(len(triangles))],
+            'material_boundary_points': material_boundary,
+            'simulation_boundary_points': simulation_boundary,
+            'energy_barrier_thickness': energy_barrier_thickness,
+            'electronic_stopping_correction_factors': [ck for _ in range(len(triangles))],
+        }
 
     cosx = np.cos(theta*np.pi/180.)
     sinx = np.sin(theta*np.pi/180.)
     if uniformly_distributed_ions:
-        positions = [(initial_particle_position, np.random.uniform(-thickness/2., thickness/2.), 0.) for _ in range(N)]
+        if not rounded:
+            positions = [(initial_particle_position, np.random.uniform(-thickness/2., thickness/2.), 0.) for _ in range(N)]
+        else:
+            positions = []
+            for _ in range(N):
+                y = np.random.uniform(-thickness/2., thickness/2.)
+                radius_x = aspect_ratio*thickness/2.
+                radius_y = thickness/2.
+                theta = np.arcsin(y/radius_y)
+                x = radius_x - radius_x*np.cos(theta)
+                positions.append((x, y, 0))
+
+
     else:
         positions = [(initial_particle_position, 0., 0.) for _ in range(N)]
 
@@ -603,7 +629,7 @@ def plot_energy_loss(name, N, num_bins=50, thickness=None, depth=None):
     plt.ylabel('y [um]')
     #plt.axis('square')
     plt.title(f'Nuclear Energy Loss {name}')
-    Hn, bins_x, bins_y, _ = plt.hist2d(x, y, weights=En/N, bins=num_bins, norm=colors.SymLogNorm(0.1))
+    Hn, bins_x, bins_y, _ = plt.hist2d(x, y, weights=En/N, bins=num_bins)#, norm=colors.SymLogNorm(0.1))
 
     plt.savefig(name+'nuclear_energy_loss.png')
     plt.close()
@@ -613,7 +639,7 @@ def plot_energy_loss(name, N, num_bins=50, thickness=None, depth=None):
     plt.ylabel('y [um]')
     plt.title(f'Electronic Energy Loss {name}')
     #plt.axis('square')
-    He, bins_x, bins_y, _ = plt.hist2d(x, y, weights=Ee/N, bins=num_bins, norm=colors.SymLogNorm(0.1))
+    He, bins_x, bins_y, _ = plt.hist2d(x, y, weights=Ee/N, bins=num_bins)#, norm=colors.SymLogNorm(0.1))
     plt.savefig(name+'electronic_energy_loss.png')
     plt.close()
 
@@ -829,7 +855,8 @@ def beam_target(ions, target, energy, angle, N_=10000, N=1, run_sim=True,
     weak_collision_order=3,
     electronic_stopping_mode=LOW_ENERGY_NONLOCAL,
     uniformly_distributed_ions=False,
-    mean_free_path_model='"LIQUID"'):
+    mean_free_path_model='"LIQUID"',
+    rounded=False):
 
     '''
     Simplified generation of a monoenergetic, mono-angular beam on target simulation using rustbca.
@@ -860,7 +887,8 @@ def beam_target(ions, target, energy, angle, N_=10000, N=1, run_sim=True,
         interaction_potential=interaction_potential, integral=integral,
         root_finder=root_finder, delta_x_angstrom=2.*pmax*MICRON/ANGSTROM,
         initial_particle_position = -2.01*pmax, weak_collision_order=weak_collision_order, ck=ck,
-        uniformly_distributed_ions=uniformly_distributed_ions, mean_free_path_model=mean_free_path_model)
+        uniformly_distributed_ions=uniformly_distributed_ions, mean_free_path_model=mean_free_path_model,
+        rounded=rounded)
 
     if run_sim: os.system(f'rustBCA.exe {name}.toml')
 
@@ -1308,6 +1336,36 @@ def helium_on_tungsten_oxide_layer():
         plt.axis([0., 1.5*np.max(d[:,2]), 0., 1.2*np.max(heights)])
         plt.savefig(f'dep_west_1_wo2_w_{j}.png')
 
+def semicircle_rectangle_geometry(depth, thickness, dx, num_triangles=19, semicircle_aspect_ratio=10):
+
+    radius_x = semicircle_aspect_ratio*thickness/2.
+    radius_y = thickness/2.
+
+    rectangle_triangles = [
+        [radius_x, depth, radius_x, radius_y, radius_y, -radius_y],
+        [radius_x, depth, depth, -radius_y, -radius_y, radius_y]
+    ]
+
+    circle_angles = np.linspace(-np.pi/2, np.pi/2, num_triangles)
+    circle_x = radius_x - radius_x*np.cos(circle_angles)
+    circle_y = radius_y*np.sin(circle_angles)
+
+    circle_triangles = [(radius_x, x2, x3, 0., y2, y3) for (x2, x3, y2, y3) in zip(circle_x[:-1], circle_x[1:], circle_y[:-1], circle_y[1:])]
+
+    triangles = rectangle_triangles + circle_triangles
+
+    points = []
+    for triangle in triangles:
+        x1, x2, x3, y1, y2, y3 = triangle
+        points.append([x1, y1])
+        points.append([x2, y2])
+        points.append([x3, y3])
+
+    material_boundary = MultiPoint(points).convex_hull.exterior.coords[:]
+    simulation_boundary = box(0. - dx, -radius_y - dx, depth + dx, radius_y + dx).exterior.coords[:]
+
+    return triangles, material_boundary, simulation_boundary
+
 def main():
     '''
     Here an example usage of beam_target is shown. This code runs rustbca and produces plots.
@@ -1316,15 +1374,17 @@ def main():
     all the distributions and trajectories are plotted.
     '''
 
-    energy = 2000
+    energy = 20000000
     angle = 0.00001
-    N = 10000
+    N = 100000
+    N_ = 1
 
-    beam_target(helium, copper, energy, angle, N_=N, N=1, do_plots=True, run_sim=True,
-        plot_trajectories=True, track_trajectories=False, thickness=50, depth=1000.,
+    beam_target(hydrogen, carbon, energy, angle, N_=N_, N=N, do_plots=True, run_sim=True,
+        plot_trajectories=False, track_trajectories=False, thickness=500, depth=5000.,
         interaction_potential=r"'KR_C'", track_energy_losses=True, track_displacements=False,
-        uniformly_distributed_ions=True, high_energy=False, electronic_stopping_mode=INTERPOLATED,
-        weak_collision_order=0, plot_distributions=True, mean_free_path_model='LIQUID')
+        uniformly_distributed_ions=True, high_energy=True, electronic_stopping_mode=INTERPOLATED,
+        weak_collision_order=0, plot_distributions=True, mean_free_path_model='GASEOUS',
+        rounded=True, track_recoils=False)
 
 if __name__ == '__main__':
     main()
